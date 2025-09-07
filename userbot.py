@@ -10,7 +10,7 @@ from pyrogram.types import Message
 # === CONFIG ===
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")  # must be a valid, fresh session string
+SESSION_STRING = os.getenv("SESSION_STRING")  # fresh session string
 CHAT_ID = os.getenv("CHAT_ID")  # channel/group for auto-upload
 DOWNLOAD_FOLDER = "downloads"
 ENCODED_FOLDER = "encoded"
@@ -121,7 +121,7 @@ def auto_mode(client: Client):
                     downloaded_episodes.add(url)
                     save_tracked()
                     print(f"✅ Done {title}\n")
-            time.sleep(600)  # check every 10 minutes
+            time.sleep(600)  # check every 10 min
         except Exception as e:
             print("Auto mode error:", e)
             time.sleep(600)
@@ -132,7 +132,8 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    no_updates=True  # prevents msg_id/time issues
+    no_updates=True,
+    system_version="1.0"
 )
 
 pending_videos = {}
@@ -143,7 +144,7 @@ def handle_video(client, message: Message):
     file_path = os.path.join(DOWNLOAD_FOLDER, file_name)
     message.download(file_path)
     pending_videos[message.message_id] = file_path
-    message.reply(f"✅ Saved {file_name}. Reply to this message with /encode to process.")
+    message.reply(f"✅ Saved {file_name}. Reply with /encode to process.")
 
 @app.on_message(filters.command("encode"))
 def encode_command(client, message: Message):
@@ -160,8 +161,7 @@ def encode_command(client, message: Message):
         def progress(line):
             try:
                 message.reply(f"📊 {line}")
-            except: 
-                pass
+            except: pass
 
         encode_video(input_path, output_path, progress_callback=progress)
         message.reply(f"✅ Done {os.path.basename(input_path)}")
