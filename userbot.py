@@ -8,10 +8,10 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 # === CONFIG ===
-API_ID = int(os.getenv("API_ID"))        # from my.telegram.org
+API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")  # from session generator
-CHAT_ID = int(os.getenv("CHAT_ID"))           # your channel/group id
+SESSION_STRING = os.getenv("SESSION_STRING")  # must be a valid, fresh session string
+CHAT_ID = os.getenv("CHAT_ID")  # channel/group for auto-upload
 DOWNLOAD_FOLDER = "downloads"
 ENCODED_FOLDER = "encoded"
 TRACK_FILE = "downloaded.json"
@@ -37,7 +37,6 @@ def encode_video(input_path, output_path, progress_callback=None):
     ext = os.path.splitext(input_path)[1].lower()
     output_path = os.path.splitext(output_path)[0] + ext
 
-    # Detect audio streams
     probe_cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
         "-show_entries", "stream=index,codec_name",
@@ -122,16 +121,19 @@ def auto_mode(client: Client):
                     downloaded_episodes.add(url)
                     save_tracked()
                     print(f"✅ Done {title}\n")
-
-            # Check every 10 min
-            time.sleep(600)
-
+            time.sleep(600)  # check every 10 minutes
         except Exception as e:
             print("Auto mode error:", e)
-            time.sleep(300)
+            time.sleep(600)
 
 # === Pyrogram Client ===
-app = Client("anime_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+app = Client(
+    "anime_userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+    no_updates=True  # prevents msg_id/time issues
+)
 
 pending_videos = {}
 
@@ -153,16 +155,16 @@ def encode_command(client, message: Message):
         input_path = pending_videos[orig_msg_id]
         output_path = os.path.join(ENCODED_FOLDER, os.path.basename(input_path))
 
-        status = message.reply(f"⚙️ Encoding {os.path.basename(input_path)}...")
+        message.reply(f"⚙️ Encoding {os.path.basename(input_path)}...")
 
         def progress(line):
             try:
-                status.edit_text(f"📊 {line}")
-            except:
+                message.reply(f"📊 {line}")
+            except: 
                 pass
 
         encode_video(input_path, output_path, progress_callback=progress)
-        status.edit_text(f"✅ Done {os.path.basename(input_path)}")
+        message.reply(f"✅ Done {os.path.basename(input_path)}")
         client.send_document(message.chat.id, output_path)
 
         os.remove(input_path)
