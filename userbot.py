@@ -8,8 +8,8 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 # === CONFIG ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")   # your Telegram Bot Token
-CHAT_ID = os.getenv("CHAT_ID")       # channel/group for auto-upload
+BOT_TOKEN = os.getenv("BOT_TOKEN")   # Telegram Bot token
+CHAT_ID = os.getenv("CHAT_ID")       # channel/group ID for auto-upload
 DOWNLOAD_FOLDER = "downloads"
 ENCODED_FOLDER = "encoded"
 TRACK_FILE = "downloaded.json"
@@ -35,7 +35,6 @@ def encode_video(input_path, output_path, progress_callback=None):
     ext = os.path.splitext(input_path)[1].lower()
     output_path = os.path.splitext(output_path)[0] + ext
 
-    # Detect audio streams
     probe_cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
         "-show_entries", "stream=index,codec_name",
