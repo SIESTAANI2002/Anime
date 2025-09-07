@@ -10,8 +10,8 @@ from pyrogram.types import Message
 # === CONFIG ===
 API_ID = int(os.getenv("API_ID"))        # from my.telegram.org
 API_HASH = os.getenv("API_HASH")
-SESSION_NAME = os.getenv("SESSION_NAME") # any name, e.g., "anime_userbot"
-CHAT_ID = os.getenv("CHAT_ID")           # channel/group id for auto-upload
+SESSION_STRING = os.getenv("SESSION_STRING")  # from session generator
+CHAT_ID = int(os.getenv("CHAT_ID"))           # your channel/group id
 DOWNLOAD_FOLDER = "downloads"
 ENCODED_FOLDER = "encoded"
 TRACK_FILE = "downloaded.json"
@@ -122,13 +122,16 @@ def auto_mode(client: Client):
                     downloaded_episodes.add(url)
                     save_tracked()
                     print(f"✅ Done {title}\n")
-            time.sleep(3600)
-        except Exception as e:
-            print("Auto mode error:", e)
+
+            # Check every 10 min
             time.sleep(600)
 
+        except Exception as e:
+            print("Auto mode error:", e)
+            time.sleep(300)
+
 # === Pyrogram Client ===
-app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
+app = Client("anime_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 
 pending_videos = {}
 
@@ -142,7 +145,6 @@ def handle_video(client, message: Message):
 
 @app.on_message(filters.command("encode"))
 def encode_command(client, message: Message):
-    # If replying to a video/document
     if message.reply_to_message:
         orig_msg_id = message.reply_to_message.message_id
         if orig_msg_id not in pending_videos:
@@ -151,15 +153,16 @@ def encode_command(client, message: Message):
         input_path = pending_videos[orig_msg_id]
         output_path = os.path.join(ENCODED_FOLDER, os.path.basename(input_path))
 
-        message.reply(f"⚙️ Encoding {os.path.basename(input_path)}...")
+        status = message.reply(f"⚙️ Encoding {os.path.basename(input_path)}...")
 
         def progress(line):
             try:
-                message.reply(f"📊 {line}")
-            except: pass
+                status.edit_text(f"📊 {line}")
+            except:
+                pass
 
         encode_video(input_path, output_path, progress_callback=progress)
-        message.reply(f"✅ Done {os.path.basename(input_path)}")
+        status.edit_text(f"✅ Done {os.path.basename(input_path)}")
         client.send_document(message.chat.id, output_path)
 
         os.remove(input_path)
