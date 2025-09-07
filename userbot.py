@@ -8,10 +8,8 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 # === CONFIG ===
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")  # fresh session string
-CHAT_ID = os.getenv("CHAT_ID")  # channel/group for auto-upload
+BOT_TOKEN = os.getenv("BOT_TOKEN")   # your Telegram Bot Token
+CHAT_ID = os.getenv("CHAT_ID")       # channel/group for auto-upload
 DOWNLOAD_FOLDER = "downloads"
 ENCODED_FOLDER = "encoded"
 TRACK_FILE = "downloaded.json"
@@ -37,6 +35,7 @@ def encode_video(input_path, output_path, progress_callback=None):
     ext = os.path.splitext(input_path)[1].lower()
     output_path = os.path.splitext(output_path)[0] + ext
 
+    # Detect audio streams
     probe_cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
         "-show_entries", "stream=index,codec_name",
@@ -126,15 +125,8 @@ def auto_mode(client: Client):
             print("Auto mode error:", e)
             time.sleep(600)
 
-# === Pyrogram Client ===
-app = Client(
-    "anime_userbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-    no_updates=True,
-    system_version="1.0"
-)
+# === Pyrogram Bot Client ===
+app = Client("anime_bot", bot_token=BOT_TOKEN)
 
 pending_videos = {}
 
