@@ -7,21 +7,18 @@ import time
 import json
 
 # === CONFIG ===
-ANIME_LIST = ["One Piece", "Attack on Titan", "Naruto"]
 DOWNLOAD_FOLDER = "downloads"
 ENCODED_FOLDER = "encoded"
 TRACK_FILE = "downloaded.json"
 
-# Environment variables for Heroku
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Create folders if they don't exist
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(ENCODED_FOLDER, exist_ok=True)
 
 bot = Bot(token=TELEGRAM_TOKEN)
-BASE_URL = "https://subsplease.org/series/"
+BASE_URL = "https://subsplease.org/"
 
 # === Load tracked episodes ===
 if os.path.exists(TRACK_FILE):
@@ -34,19 +31,19 @@ def save_tracked():
     with open(TRACK_FILE, "w") as f:
         json.dump(list(downloaded_episodes), f)
 
-# === Get latest magnet link for an anime ===
-def get_latest_magnet(anime_name):
-    url = BASE_URL + anime_name.replace(" ", "-").lower()
+# === Get all recent releases from SubsPlease ===
+def get_recent_releases():
+    releases = []
     try:
-        res = requests.get(url, timeout=15)
+        res = requests.get(BASE_URL, timeout=15)
         soup = BeautifulSoup(res.text, "html.parser")
         for link in soup.find_all("a"):
             href = link.get("href", "")
             if "magnet:" in href:
-                return href
+                releases.append(href)
     except Exception as e:
-        print(f"Error fetching {anime_name}: {e}")
-    return None
+        print("Error fetching recent releases:", e)
+    return releases
 
 # === Download via aria2c ===
 def download_magnet(magnet_link):
@@ -77,7 +74,7 @@ def send_to_telegram(video_path):
     with open(video_path, "rb") as f:
         bot.send_video(chat_id=CHAT_ID, video=f)
 
-# === Delete local files to save storage ===
+# === Delete local files ===
 def cleanup(file_path):
     if os.path.exists(file_path):
         os.remove(file_path)
@@ -85,13 +82,12 @@ def cleanup(file_path):
 # === MAIN LOOP ===
 while True:
     try:
-        for anime in ANIME_LIST:
-            magnet = get_latest_magnet(anime)
-            if magnet and magnet not in downloaded_episodes:
-                print(f"New episode found for {anime}! Downloading...")
+        recent_magnets = get_recent_releases()
+        for magnet in recent_magnets:
+            if magnet not in downloaded_episodes:
+                print("New episode found! Downloading...")
                 download_magnet(magnet)
 
-                # Get the latest downloaded file
                 files = os.listdir(DOWNLOAD_FOLDER)
                 files.sort(key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_FOLDER, x)))
                 latest_file = os.path.join(DOWNLOAD_FOLDER, files[-1])
@@ -102,15 +98,12 @@ while True:
                 print(f"Uploading {encoded_file} to Telegram...")
                 send_to_telegram(encoded_file)
 
-                # Cleanup files to save storage
                 cleanup(latest_file)
                 cleanup(encoded_file)
 
                 downloaded_episodes.add(magnet)
                 save_tracked()
-                print(f"{anime} episode processed successfully ✅\n")
-            else:
-                print(f"No new episode found for {anime}.")
+                print("Episode processed successfully ✅\n")
 
         print("Waiting 1 hour before next check...\n")
         time.sleep(3600)
