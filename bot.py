@@ -88,7 +88,7 @@ def encode_video(input_path, output_path, progress_callback=None):
         elif codec == "mp3":
             command += [f"-c:a:{idx}", "libmp3lame", f"-b:a:{idx}", "128k"]
         elif codec == "flac":
-            command += [f"-c:a:{idx}", "flac"]  # lossless, no bitrate limit
+            command += [f"-c:a:{idx}", "flac"]  # keep lossless
         else:
             command += [f"-c:a:{idx}", "aac", f"-b:a:{idx}", "128k"]
 
@@ -145,7 +145,7 @@ def auto_mode():
 pending_videos = {}
 
 def start(update: Update, context: CallbackContext):
-    update.message.reply_text("👋 I auto-download SubsPlease releases & also encode your uploaded videos.\nSend a video, then use /encode <filename>.")
+    update.message.reply_text("👋 I auto-download SubsPlease releases & also encode your uploaded videos.\n\n➤ Upload a video and reply with /encode to start encoding.")
 
 def handle_video(update: Update, context: CallbackContext):
     video = update.message.video or update.message.document
@@ -157,42 +157,48 @@ def handle_video(update: Update, context: CallbackContext):
     file_name = video.file_name if hasattr(video, "file_name") else f"{file_id}.mp4"
     file_path = os.path.join(DOWNLOAD_FOLDER, file_name)
 
-    update.message.reply_text(f"⬇️ Downloading {file_name}...")
     new_file = bot.get_file(file_id)
     new_file.download(custom_path=file_path)
 
-    pending_videos[file_name] = file_path
-    update.message.reply_text(f"✅ {file_name} ready.\nUse /encode {file_name}")
+    pending_videos[file_id] = file_path
+    update.message.reply_text(f"✅ {file_name} saved.\nReply to this with /encode to process it.")
 
 def encode_command(update: Update, context: CallbackContext):
-    if len(context.args) == 0:
-        update.message.reply_text("Usage: /encode <filename>")
+    message = update.message
+
+    # Case 1: User replied to a video/document
+    if message.reply_to_message and (message.reply_to_message.video or message.reply_to_message.document):
+        video = message.reply_to_message.video or message.reply_to_message.document
+        file_id = video.file_id
+
+        if file_id not in pending_videos:
+            message.reply_text("⚠️ File not found, please upload it again.")
+            return
+
+        input_path = pending_videos[file_id]
+        output_path = os.path.join(ENCODED_FOLDER, os.path.basename(input_path))
+
+        message.reply_text(f"⚙️ Encoding {os.path.basename(input_path)}...")
+
+        def progress(line):
+            try:
+                message.reply_text(f"📊 {line}")
+            except:
+                pass
+
+        encode_video(input_path, output_path, progress_callback=progress)
+        message.reply_text(f"✅ Done {os.path.basename(input_path)}")
+
+        with open(output_path, "rb") as f:
+            message.reply_document(f)
+
+        cleanup(input_path)
+        cleanup(output_path)
+        pending_videos.pop(file_id, None)
         return
 
-    filename = context.args[0]
-    if filename not in pending_videos:
-        update.message.reply_text("⚠️ File not found.")
-        return
-
-    input_path = pending_videos[filename]
-    output_path = os.path.join(ENCODED_FOLDER, filename)
-    update.message.reply_text(f"⚙️ Encoding {filename}...")
-
-    def progress(line):
-        try:
-            update.message.reply_text(f"📊 {line}")
-        except:
-            pass
-
-    encode_video(input_path, output_path, progress_callback=progress)
-    update.message.reply_text(f"✅ Done {filename}")
-
-    with open(output_path, "rb") as f:
-        update.message.reply_document(f)
-
-    cleanup(input_path)
-    cleanup(output_path)
-    pending_videos.pop(filename, None)
+    # Case 2: No reply, fallback
+    message.reply_text("Reply to a video with /encode to start encoding.")
 
 # === Main ===
 def main():
