@@ -1,10 +1,11 @@
 import os
-import subprocess
 import requests
-from bs4 import BeautifulSoup
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import time
 import json
+import threading
+import subprocess
 
 # === CONFIG ===
 DOWNLOAD_FOLDER = "downloads"
@@ -18,7 +19,7 @@ os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(ENCODED_FOLDER, exist_ok=True)
 
 bot = Bot(token=TELEGRAM_TOKEN)
-BASE_URL = "https://subsplease.org/"
+API_URL = "https://subsplease.org/api/?f=latest&tz=UTC"
 
 # === Load tracked episodes ===
 if os.path.exists(TRACK_FILE):
@@ -31,83 +32,180 @@ def save_tracked():
     with open(TRACK_FILE, "w") as f:
         json.dump(list(downloaded_episodes), f)
 
-# === Get all recent releases from SubsPlease ===
+# === Get releases from SubsPlease API ===
 def get_recent_releases():
     releases = []
     try:
-        res = requests.get(BASE_URL, timeout=15)
-        soup = BeautifulSoup(res.text, "html.parser")
-        for link in soup.find_all("a"):
-            href = link.get("href", "")
-            if "magnet:" in href:
-                releases.append(href)
+        res = requests.get(API_URL, timeout=15).json()
+        for ep in res.get("data", []):
+            title = ep["release_title"]
+            link = ep["link"]
+            releases.append((title, link))
     except Exception as e:
-        print("Error fetching recent releases:", e)
+        print("Error fetching releases:", e)
     return releases
 
-# === Download via aria2c ===
-def download_magnet(magnet_link):
-    command = ["aria2c", "-d", DOWNLOAD_FOLDER, magnet_link, "--max-connection-per-server=4"]
-    subprocess.run(command)
+def download_file(url, output_path):
+    r = requests.get(url, stream=True)
+    with open(output_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+    return output_path
 
-# === Encode video to 720p ===
-def encode_video(input_path):
-    filename = os.path.basename(input_path)
-    output_path = os.path.join(ENCODED_FOLDER, filename)
+# === Encoding Function ===
+def encode_video(input_path, output_path, progress_callback=None):
+    import json
+
+    ext = os.path.splitext(input_path)[1].lower()
+    output_path = os.path.splitext(output_path)[0] + ext
+
+    # Detect audio streams
+    probe_cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index,codec_name",
+        "-of", "json", input_path
+    ]
+    result = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    audio_info = json.loads(result.stdout).get("streams", [])
+
     command = [
-        "ffmpeg",
-        "-i", input_path,
+        "ffmpeg", "-i", input_path,
         "-vf", "scale=-1:720",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-y",
-        output_path
+        "-c:s", "copy"
     ]
-    subprocess.run(command)
+
+    for stream in audio_info:
+        idx = stream["index"]
+        codec = stream["codec_name"].lower()
+        if codec == "aac":
+            command += [f"-c:a:{idx}", "aac", f"-b:a:{idx}", "128k"]
+        elif codec == "opus":
+            command += [f"-c:a:{idx}", "libopus", f"-b:a:{idx}", "128k"]
+        elif codec == "mp3":
+            command += [f"-c:a:{idx}", "libmp3lame", f"-b:a:{idx}", "128k"]
+        elif codec == "flac":
+            command += [f"-c:a:{idx}", "flac"]  # lossless, no bitrate limit
+        else:
+            command += [f"-c:a:{idx}", "aac", f"-b:a:{idx}", "128k"]
+
+    command += ["-y", output_path]
+
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in process.stdout:
+        if progress_callback and ("frame=" in line or "time=" in line):
+            progress_callback(line.strip())
+    process.wait()
     return output_path
 
-# === Send video to Telegram ===
 def send_to_telegram(video_path):
     with open(video_path, "rb") as f:
-        bot.send_video(chat_id=CHAT_ID, video=f)
+        bot.send_document(chat_id=CHAT_ID, document=f)
 
-# === Delete local files ===
 def cleanup(file_path):
     if os.path.exists(file_path):
         os.remove(file_path)
 
-# === MAIN LOOP ===
-while True:
-    try:
-        recent_magnets = get_recent_releases()
-        for magnet in recent_magnets:
-            if magnet not in downloaded_episodes:
-                print("New episode found! Downloading...")
-                download_magnet(magnet)
+# === Auto Mode (background) ===
+def auto_mode():
+    while True:
+        try:
+            recent_releases = get_recent_releases()
+            for title, url in recent_releases:
+                if url not in downloaded_episodes:
+                    print(f"⬇️ Downloading {title}")
+                    file_path = os.path.join(DOWNLOAD_FOLDER, title + os.path.splitext(url)[1])
+                    download_file(url, file_path)
 
-                files = os.listdir(DOWNLOAD_FOLDER)
-                files.sort(key=lambda x: os.path.getmtime(os.path.join(DOWNLOAD_FOLDER, x)))
-                latest_file = os.path.join(DOWNLOAD_FOLDER, files[-1])
+                    print(f"⚙️ Encoding {title}...")
+                    output_file = os.path.join(ENCODED_FOLDER, os.path.basename(file_path))
+                    encode_video(file_path, output_file)
 
-                print(f"Encoding {latest_file} to 720p...")
-                encoded_file = encode_video(latest_file)
+                    print(f"📤 Uploading {title}...")
+                    send_to_telegram(output_file)
 
-                print(f"Uploading {encoded_file} to Telegram...")
-                send_to_telegram(encoded_file)
+                    cleanup(file_path)
+                    cleanup(output_file)
 
-                cleanup(latest_file)
-                cleanup(encoded_file)
+                    downloaded_episodes.add(url)
+                    save_tracked()
+                    print(f"✅ Done {title}\n")
 
-                downloaded_episodes.add(magnet)
-                save_tracked()
-                print("Episode processed successfully ✅\n")
+            print("Sleeping 1 hour...\n")
+            time.sleep(3600)
 
-        print("Waiting 1 hour before next check...\n")
-        time.sleep(3600)
+        except Exception as e:
+            print("Error:", e)
+            time.sleep(600)
 
-    except Exception as e:
-        print("Error:", e)
-        time.sleep(600)
+# === Manual Mode ===
+pending_videos = {}
+
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("👋 I auto-download SubsPlease releases & also encode your uploaded videos.\nSend a video, then use /encode <filename>.")
+
+def handle_video(update: Update, context: CallbackContext):
+    video = update.message.video or update.message.document
+    if not video:
+        update.message.reply_text("Send a video file.")
+        return
+
+    file_id = video.file_id
+    file_name = video.file_name if hasattr(video, "file_name") else f"{file_id}.mp4"
+    file_path = os.path.join(DOWNLOAD_FOLDER, file_name)
+
+    update.message.reply_text(f"⬇️ Downloading {file_name}...")
+    new_file = bot.get_file(file_id)
+    new_file.download(custom_path=file_path)
+
+    pending_videos[file_name] = file_path
+    update.message.reply_text(f"✅ {file_name} ready.\nUse /encode {file_name}")
+
+def encode_command(update: Update, context: CallbackContext):
+    if len(context.args) == 0:
+        update.message.reply_text("Usage: /encode <filename>")
+        return
+
+    filename = context.args[0]
+    if filename not in pending_videos:
+        update.message.reply_text("⚠️ File not found.")
+        return
+
+    input_path = pending_videos[filename]
+    output_path = os.path.join(ENCODED_FOLDER, filename)
+    update.message.reply_text(f"⚙️ Encoding {filename}...")
+
+    def progress(line):
+        try:
+            update.message.reply_text(f"📊 {line}")
+        except:
+            pass
+
+    encode_video(input_path, output_path, progress_callback=progress)
+    update.message.reply_text(f"✅ Done {filename}")
+
+    with open(output_path, "rb") as f:
+        update.message.reply_document(f)
+
+    cleanup(input_path)
+    cleanup(output_path)
+    pending_videos.pop(filename, None)
+
+# === Main ===
+def main():
+    threading.Thread(target=auto_mode, daemon=True).start()
+
+    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("encode", encode_command))
+    dp.add_handler(MessageHandler(Filters.video | Filters.document, handle_video))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    main()
